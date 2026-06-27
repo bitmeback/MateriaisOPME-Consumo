@@ -40,7 +40,10 @@ async function sendWahaMessage(phone, message) {
                 (s.saldo / NULLIF(CEIL(SUM(c.consumo) / 3), 0)) AS crity_ratio
             FROM saldo_estoque_atual s
             LEFT JOIN consumo_materiais c ON s.cd_material = c.codigo
-            WHERE c.ano = YEAR(CURDATE()) AND c.mes >= MONTH(CURDATE()) - 3
+            LEFT JOIN consumo_fornecedor_especialidade cfe ON cfe.cnpj_fornecedor = s.cd_fornec_consignado AND cfe.id_especialidade = 1
+            WHERE c.ano = YEAR(CURDATE()) 
+              AND c.mes >= MONTH(CURDATE()) - 3
+              AND cfe.id_especialidade IS NULL
             GROUP BY s.cd_material, s.saldo, c.descricao, c.fornecedor
             HAVING media_trimestre > 1
             ORDER BY crity_ratio ASC, media_trimestre DESC
