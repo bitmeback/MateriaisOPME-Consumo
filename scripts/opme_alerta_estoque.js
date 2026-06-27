@@ -33,18 +33,21 @@ async function sendWahaMessage(phone, message) {
         const queryCalculo = `
             SELECT 
                 s.cd_material,
-                s.saldo,
-                c.descricao,
-                c.fornecedor,
+                s.cd_fornec_consignado AS cnpj_fornecedor,
+                MAX(s.saldo) as saldo,
+                MAX(COALESCE(c.descricao, 'Material Desconhecido')) as descricao,
+                MAX(COALESCE(c.fornecedor, 'Não cadastrado')) as fornecedor,
                 CEIL(SUM(c.consumo) / 3) AS media_trimestre,
-                (s.saldo / NULLIF(CEIL(SUM(c.consumo) / 3), 0)) AS crity_ratio
+                (MAX(s.saldo) / NULLIF(CEIL(SUM(c.consumo) / 3), 0)) AS crity_ratio
             FROM saldo_estoque_atual s
             LEFT JOIN consumo_materiais c ON s.cd_material = c.codigo
             LEFT JOIN consumo_fornecedor_especialidade cfe ON cfe.cnpj_fornecedor = s.cd_fornec_consignado AND cfe.id_especialidade = 1
+            LEFT JOIN consumo_relacoes_inativas cri ON cri.cd_material = s.cd_material AND cri.cnpj_fornecedor = s.cd_fornec_consignado
             WHERE c.ano = YEAR(CURDATE()) 
               AND c.mes >= MONTH(CURDATE()) - 3
               AND cfe.id_especialidade IS NULL
-            GROUP BY s.cd_material, s.saldo, c.descricao, c.fornecedor
+              AND cri.cd_material IS NULL
+            GROUP BY s.cd_material, s.cd_fornec_consignado
             HAVING media_trimestre > 1
             ORDER BY crity_ratio ASC, media_trimestre DESC
         `;
@@ -54,8 +57,17 @@ async function sendWahaMessage(phone, message) {
         let msgCriticos = ''; let contCritico = 0;
         let msgAlertas = ''; let contAlerta = 0;
 
+        // 1. Mapear status anteriores em lote da tabela consumo_status_atual para checar as transições
+        const [rowsStatus] = await connOpme.query('SELECT cd_material, cnpj_fornecedor, status_atual FROM consumo_status_atual');
+        const statusMap = {};
+        for (const row of rowsStatus) {
+            const key = `${row.cd_material}_${row.cnpj_fornecedor}`;
+            statusMap[key] = row.status_atual;
+        }
+
         for (const item of results) {
             const codigo = item.cd_material || 'N/A';
+            const cnpj = item.cnpj_fornecedor || '';
             const saldo = parseFloat(item.saldo) || 0;
             const media = parseFloat(item.media_trimestre) || 0;
             const threshold_critico = Math.ceil(media * 0.95);
@@ -64,21 +76,56 @@ async function sendWahaMessage(phone, message) {
             const shortDesc = item.descricao ? item.descricao.substring(0, 30) : 'Material Desconhecido';
             const shortForn = item.fornecedor ? item.fornecedor.substring(0, 25) : 'Não inf.';
 
+            // Determinar o status calculado hoje
+            let currentStatus = 'normal';
             if (saldo <= threshold_critico) {
+                currentStatus = 'critico';
                 if(contCritico < 15) {
                     msgCriticos += `• *[${codigo}]* ${shortDesc}...\n  ↳ Forn: ${shortForn}\n  ↳ Média: ${media} | *Saldo: ${saldo}*\n\n`;
                 }
                 contCritico++;
             } else if (saldo <= threshold_warning && saldo > threshold_critico) {
+                currentStatus = 'alerta';
                 if(contAlerta < 15) {
                     msgAlertas += `• *[${codigo}]* ${shortDesc}...\n  ↳ Forn: ${shortForn}\n  ↳ Média: ${media} | *Saldo: ${saldo}*\n\n`;
                 }
                 contAlerta++;
             }
+
+            // --- Lógica silenciosa de transição de status (Passo 1 do Planejamento) ---
+            if (cnpj !== '') {
+                const key = `${codigo}_${cnpj}`;
+                const oldStatus = statusMap[key] || null;
+
+                if (oldStatus !== currentStatus) {
+                    console.log(`[STATUS VIRADA] Material ${codigo} (${shortForn}): ${oldStatus} -> ${currentStatus}`);
+                    
+                    // Grava transição no histórico
+                    await connOpme.execute(
+                        'INSERT INTO consumo_status_historico (cd_material, cnpj_fornecedor, status_anterior, status_novo, saldo_momento, media_momento) VALUES (?, ?, ?, ?, ?, ?)',
+                        [codigo, cnpj, oldStatus, currentStatus, saldo, media]
+                    );
+
+                    if (oldStatus === null) {
+                        // Cadastro inicial de estado mestre
+                        await connOpme.execute(
+                            'INSERT INTO consumo_status_atual (cd_material, cnpj_fornecedor, status_atual, data_entrada) VALUES (?, ?, ?, NOW())',
+                            [codigo, cnpj, currentStatus]
+                        );
+                    } else {
+                        // Atualiza estado mestre reiniciando o aging temporal
+                        await connOpme.execute(
+                            'UPDATE consumo_status_atual SET status_atual = ?, data_entrada = NOW() WHERE cd_material = ? AND cnpj_fornecedor = ?',
+                            [currentStatus, codigo, cnpj]
+                        );
+                    }
+                }
+            }
         }
 
         if (contCritico === 0 && contAlerta === 0) {
             console.log('[MONITOR] 🟢 Nenhum estoque operando sob risco. Auditoria não necessária.');
+            await connOpme.end();
             process.exit(0);
         }
 
