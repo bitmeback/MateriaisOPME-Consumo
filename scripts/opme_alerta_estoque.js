@@ -37,8 +37,8 @@ async function sendWahaMessage(phone, message) {
                 MAX(s.saldo) as saldo,
                 MAX(COALESCE(c.descricao, 'Material Desconhecido')) as descricao,
                 MAX(COALESCE(c.fornecedor, 'Não cadastrado')) as fornecedor,
-                CEIL(SUM(c.consumo) / 3) AS media_trimestre,
-                (MAX(s.saldo) / NULLIF(CEIL(SUM(c.consumo) / 3), 0)) AS crity_ratio
+                ROUND(SUM(c.consumo) / COUNT(DISTINCT c.mes), 1) AS media_trimestre,
+                (MAX(s.saldo) / NULLIF(ROUND(SUM(c.consumo) / COUNT(DISTINCT c.mes), 1), 0)) AS crity_ratio
             FROM saldo_estoque_atual s
             LEFT JOIN consumo_materiais c ON s.cd_material = c.codigo
             LEFT JOIN consumo_fornecedor_especialidade cfe ON cfe.cnpj_fornecedor = s.cd_fornec_consignado AND cfe.id_especialidade = 1
