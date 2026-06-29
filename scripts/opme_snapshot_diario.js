@@ -36,20 +36,20 @@ const DB_CONFIG = {
                 s.cd_material,
                 s.cd_fornec_consignado AS cnpj_fornecedor,
                 MAX(s.saldo) as saldo,
-                MAX(COALESCE(c.descricao, 'Material Desconhecido')) as descricao,
-                MAX(COALESCE(c.fornecedor, 'Não cadastrado')) as fornecedor,
-                ROUND(SUM(c.consumo) / COUNT(DISTINCT c.mes), 1) AS media_trimestre,
-                (MAX(s.saldo) / NULLIF(ROUND(SUM(c.consumo) / COUNT(DISTINCT c.mes), 1), 0)) AS crity_ratio
+                MAX(COALESCE(cad.descricao, 'Material Desconhecido')) as descricao,
+                COALESCE(ROUND(SUM(c.consumo) / NULLIF(COUNT(DISTINCT c.mes), 0), 1), 0) AS media_trimestre,
+                (MAX(s.saldo) / NULLIF(COALESCE(ROUND(SUM(c.consumo) / NULLIF(COUNT(DISTINCT c.mes), 0), 1), 0), 0)) AS crity_ratio
             FROM saldo_estoque_atual s
+            LEFT JOIN consumo_materiais_cadastro cad ON s.cd_material = cad.cd_material
             LEFT JOIN consumo_materiais c ON s.cd_material = c.codigo
+                AND c.ano = YEAR(CURDATE()) 
+                AND c.mes >= MONTH(CURDATE()) - 3
             LEFT JOIN consumo_fornecedor_especialidade cfe ON cfe.cnpj_fornecedor = s.cd_fornec_consignado AND cfe.id_especialidade = 1
             LEFT JOIN consumo_relacoes_inativas cri ON cri.cd_material = s.cd_material AND cri.cnpj_fornecedor = s.cd_fornec_consignado
-            WHERE c.ano = YEAR(CURDATE()) 
-              AND c.mes >= MONTH(CURDATE()) - 3
-              AND cfe.id_especialidade IS NULL
+            WHERE cfe.id_especialidade IS NULL
               AND cri.cd_material IS NULL
             GROUP BY s.cd_material, s.cd_fornec_consignado
-            HAVING media_trimestre > 1
+            HAVING media_trimestre >= 1
             ORDER BY crity_ratio ASC, media_trimestre DESC
         `;
 
@@ -62,13 +62,26 @@ const DB_CONFIG = {
             for (const item of results) {
                 const saldo = parseFloat(item.saldo) || 0;
                 const media = parseFloat(item.media_trimestre) || 0;
-                const threshold_critico = Math.ceil(media * 0.95);
-                const threshold_warning = Math.ceil(media * 1.05);
+                // Thresholds por faixa de média
+                let threshold_critico, threshold_warning;
+                if (media <= 3) {
+                    threshold_critico = 0;
+                    threshold_warning = Math.ceil(media);
+                } else {
+                    threshold_critico = Math.ceil(media * 0.9);
+                    threshold_warning = Math.ceil(media);
+                }
 
                 let status = 'normal';
-                if (saldo <= threshold_critico) { status = 'critico'; critico++; }
-                else if (saldo <= threshold_warning) { status = 'alerta'; alerta++; }
-                else { normal++; }
+                if (media <= 3) {
+                    if (saldo <= 0) { status = 'critico'; critico++; }
+                    else if (saldo < threshold_warning) { status = 'alerta'; alerta++; }
+                    else { normal++; }
+                } else {
+                    if (saldo <= threshold_critico) { status = 'critico'; critico++; }
+                    else if (saldo <= threshold_warning) { status = 'alerta'; alerta++; }
+                    else { normal++; }
+                }
                 console.log(`  [${status.toUpperCase()}] ${item.cd_material} | Saldo: ${saldo} | Media: ${media}`);
             }
             console.log(`[DRY-RUN] Resumo: ${critico} críticos, ${alerta} alerta, ${normal} normal`);
@@ -81,12 +94,24 @@ const DB_CONFIG = {
         for (const item of results) {
             const saldo = parseFloat(item.saldo) || 0;
             const media = parseFloat(item.media_trimestre) || 0;
-            const threshold_critico = Math.ceil(media * 0.95);
-            const threshold_warning = Math.ceil(media * 1.05);
+            // Thresholds por faixa de média
+            let threshold_critico, threshold_warning;
+            if (media <= 3) {
+                threshold_critico = 0;
+                threshold_warning = Math.ceil(media);
+            } else {
+                threshold_critico = Math.ceil(media * 0.9);
+                threshold_warning = Math.ceil(media);
+            }
 
             let status = 'normal';
-            if (saldo <= threshold_critico) status = 'critico';
-            else if (saldo <= threshold_warning) status = 'alerta';
+            if (media <= 3) {
+                if (saldo <= 0) status = 'critico';
+                else if (saldo < threshold_warning) status = 'alerta';
+            } else {
+                if (saldo <= threshold_critico) status = 'critico';
+                else if (saldo <= threshold_warning) status = 'alerta';
+            }
 
             await conn.execute(
                 `REPLACE INTO consumo_snapshot_diario 
