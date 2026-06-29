@@ -49,7 +49,6 @@ const DB_CONFIG = {
             WHERE cfe.id_especialidade IS NULL
               AND cri.cd_material IS NULL
             GROUP BY s.cd_material, s.cd_fornec_consignado
-            HAVING media_trimestre >= 1
             ORDER BY crity_ratio ASC, media_trimestre DESC
         `;
 
@@ -58,7 +57,7 @@ const DB_CONFIG = {
 
         if (dryRun) {
             // Mostra amostra sem gravar
-            let critico = 0, alerta = 0, normal = 0;
+            let critico = 0, alerta = 0, normal = 0, semGiro = 0, inativo = 0;
             for (const item of results) {
                 const saldo = parseFloat(item.saldo) || 0;
                 const media = parseFloat(item.media_trimestre) || 0;
@@ -73,7 +72,9 @@ const DB_CONFIG = {
                 }
 
                 let status = 'normal';
-                if (media <= 3) {
+                if (media < 1 && saldo > 0) { status = 'sem_giro'; semGiro++; }
+                else if (media < 1 && saldo <= 0) { status = 'inativo'; inativo++; }
+                else if (media <= 3) {
                     if (saldo <= 0) { status = 'critico'; critico++; }
                     else if (saldo < threshold_warning) { status = 'alerta'; alerta++; }
                     else { normal++; }
@@ -84,7 +85,7 @@ const DB_CONFIG = {
                 }
                 console.log(`  [${status.toUpperCase()}] ${item.cd_material} | Saldo: ${saldo} | Media: ${media}`);
             }
-            console.log(`[DRY-RUN] Resumo: ${critico} críticos, ${alerta} alerta, ${normal} normal`);
+            console.log(`[DRY-RUN] Resumo: ${critico} críticos, ${alerta} alerta, ${normal} normal, ${semGiro} sem giro, ${inativo} inativo`);
             await conn.end();
             process.exit(0);
         }
@@ -105,7 +106,9 @@ const DB_CONFIG = {
             }
 
             let status = 'normal';
-            if (media <= 3) {
+            if (media < 1 && saldo > 0) status = 'sem_giro';
+            else if (media < 1 && saldo <= 0) status = 'inativo';
+            else if (media <= 3) {
                 if (saldo <= 0) status = 'critico';
                 else if (saldo < threshold_warning) status = 'alerta';
             } else {

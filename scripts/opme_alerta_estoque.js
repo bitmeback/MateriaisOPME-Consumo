@@ -50,7 +50,6 @@ async function sendWahaMessage(phone, message) {
             WHERE cfe.id_especialidade IS NULL
               AND cri.cd_material IS NULL
             GROUP BY s.cd_material, s.cd_fornec_consignado
-            HAVING media_trimestre >= 1
             ORDER BY crity_ratio ASC, media_trimestre DESC
         `;
 
@@ -58,6 +57,7 @@ async function sendWahaMessage(phone, message) {
         
         let msgCriticos = ''; let contCritico = 0;
         let msgAlertas = ''; let contAlerta = 0;
+        let msgSemGiro = ''; let contSemGiro = 0;
 
         // 1. Mapear status anteriores em lote da tabela consumo_status_atual para checar as transições
         const [rowsStatus] = await connOpme.query('SELECT cd_material, cnpj_fornecedor, status_atual FROM consumo_status_atual');
@@ -90,7 +90,17 @@ async function sendWahaMessage(phone, message) {
 
             // Determinar o status calculado hoje
             let currentStatus = 'normal';
-            if (media <= 3) {
+            if (media < 1 && saldo > 0) {
+                // SEM GIRO — estoque parado sem consumo recente
+                currentStatus = 'sem_giro';
+                if(contSemGiro < 5) {
+                    msgSemGiro += `• *[${codigo}]* ${shortDesc}...\n  ↳ Forn: ${shortForn}\n  ↳ Média: — | *Saldo: ${saldo}*\n\n`;
+                }
+                contSemGiro++;
+            } else if (media < 1 && saldo <= 0) {
+                // INATIVO — sem estoque e sem consumo
+                currentStatus = 'inativo';
+            } else if (media <= 3) {
                 // Grupo A
                 if (saldo <= 0) {
                     currentStatus = 'critico';
@@ -153,8 +163,8 @@ async function sendWahaMessage(phone, message) {
             }
         }
 
-        if (contCritico === 0 && contAlerta === 0) {
-            console.log('[MONITOR] 🟢 Nenhum estoque operando sob risco. Auditoria não necessária.');
+        if (contCritico === 0 && contAlerta === 0 && contSemGiro === 0) {
+            console.log('[MONITOR] 🟢 Nenhum estoque operando sob risco. Nenhum item sem giro. Auditoria não necessária.');
             await connOpme.end();
             process.exit(0);
         }
@@ -171,7 +181,12 @@ async function sendWahaMessage(phone, message) {
             if(contAlerta > 15) finalReport += `_(+ ${contAlerta - 15} alertas omitidos)_\n`;
         }
 
-        finalReport += `\n📌 _Monitorado: ${results.length} materiais em giro._`;
+        if (contSemGiro > 0) {
+            finalReport += `\n🟣 *SEM GIRO (${contSemGiro})*\n_Estoque parado sem consumo recente_\n\n${msgSemGiro}`;
+            if(contSemGiro > 5) finalReport += `_(+ ${contSemGiro - 5} itens sem giro omitidos)_\n`;
+        }
+
+        finalReport += `\n📌 _Monitorado: ${results.length} materiais._`;
 
         const connReports = await mysql.createConnection({
             socketPath: '/var/run/mysqld/mysqld.sock', user: 'root', password: 'QbbRkK7bKiGFMRCWggiLgaiu', database: 'materiais_opme_reports'
