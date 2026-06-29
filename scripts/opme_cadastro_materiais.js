@@ -11,6 +11,8 @@
 
 const https = require('https');
 const mysql = require('mysql2/promise');
+const quiet = process.argv.includes('--quiet');
+if (quiet) { const _log = console.log; console.log = () => {}; }
 
 function makeRequest(url, options = {}) {
   return new Promise((resolve, reject) => {

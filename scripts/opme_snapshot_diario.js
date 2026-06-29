@@ -6,11 +6,13 @@
  * Roda após a ingestão de dados e calcula o status (normal/alerta/critico)
  * de cada par (material, fornecedor), gravando na tabela consumo_snapshot_diario.
  *
- * Uso: node opme_snapshot_diario.js [--dry-run]
+ * Uso: node opme_snapshot_diario.js [--dry-run] [--quiet]
  *
  * Chave única (data_snapshot, cd_material, cnpj_fornecedor) garante
  * idempotência — re-runs no mesmo dia fazem REPLACE ao invés de duplicar.
  */
+const quiet = process.argv.includes('--quiet');
+if (quiet) { const _log = console.log; console.log = () => {}; }
 
 const mysql = require('mysql2/promise');
 
